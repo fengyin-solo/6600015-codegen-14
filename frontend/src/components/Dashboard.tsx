@@ -1,9 +1,9 @@
-import { useState } from 'react'
-import { Layout, Tabs, Statistic, Row, Col, Card, Tag, Button, Input, Table, Drawer, Descriptions, Space, Progress, Modal, Select, DatePicker, Form } from 'antd'
+import { useState, useMemo } from 'react'
+import { Layout, Tabs, Statistic, Row, Col, Card, Tag, Button, Input, Table, Drawer, Descriptions, Space, Progress, Modal, Select, DatePicker, Form, message } from 'antd'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 import { useTaskStore } from '../store/tasks'
 import type { Task, TaskStatus, MaintenanceWindow, MaintenanceWindowStatus } from '../types'
-import dayjs from 'dayjs'
+import dayjs, { Dayjs } from 'dayjs'
 
 const { Header, Content } = Layout
 const { RangePicker } = DatePicker
@@ -26,6 +26,73 @@ export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [mwModalOpen, setMwModalOpen] = useState(false)
   const [mwForm] = Form.useForm()
+
+  const nodeOptions = useMemo(() => {
+    return store.nodes.map(n => ({
+      label: (
+        <Space>
+          <span>{n.name}</span>
+          {store.isNodeInMaintenance(n.name) && <Tag color="orange">维护中</Tag>}
+        </Space>
+      ),
+      value: n.id,
+      disabled: store.isNodeInMaintenance(n.name),
+      nodeName: n.name,
+    }))
+  }, [store.nodes, store.maintenanceWindows])
+
+  const disabledDate = (current: Dayjs | null) => {
+    if (!current) return false
+    return current.isBefore(dayjs().startOf('day'))
+  }
+
+  const handleOpenMWModal = () => {
+    store.setUiPaused(true)
+    mwForm.resetFields()
+    mwForm.setFieldsValue({
+      timeRange: [dayjs().add(1, 'hour'), dayjs().add(3, 'hour')],
+    })
+    setMwModalOpen(true)
+  }
+
+  const handleCloseMWModal = () => {
+    mwForm.resetFields()
+    setMwModalOpen(false)
+    store.setUiPaused(false)
+  }
+
+  const handleCreateMW = () => {
+    mwForm.validateFields()
+      .then(values => {
+        const [start, end] = values.timeRange as [Dayjs, Dayjs]
+        if (!start || !end) {
+          message.error('请选择维护时间范围')
+          return
+        }
+        if (end.isBefore(start) || end.isSame(start)) {
+          message.error('结束时间必须晚于开始时间')
+          return
+        }
+        const selectedOption = nodeOptions.find(o => o.value === values.nodeId)
+        if (!selectedOption) {
+          message.error('请选择有效的节点')
+          return
+        }
+        store.createMaintenanceWindow(
+          values.nodeId,
+          selectedOption.nodeName,
+          values.reason,
+          start.valueOf(),
+          end.valueOf(),
+        )
+        message.success('维护窗口创建成功')
+        handleCloseMWModal()
+      })
+      .catch(err => {
+        console.error('Form validation failed:', err)
+        message.error('请填写完整的维护窗口信息')
+      })
+  }
 
   const taskColumns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 100 },
@@ -70,21 +137,6 @@ export default function Dashboard() {
       </Space>
     )},
   ]
-
-  const handleCreateMW = () => {
-    mwForm.validateFields().then(values => {
-      const [start, end] = values.timeRange
-      store.createMaintenanceWindow(
-        values.nodeId,
-        store.nodes.find(n => n.id === values.nodeId)?.name ?? values.nodeId,
-        values.reason,
-        start.valueOf(),
-        end.valueOf(),
-      )
-      mwForm.resetFields()
-      setMwModalOpen(false)
-    })
-  }
 
   const successCount = store.tasks.filter(t => t.status === 'success').length
   const failedCount = store.tasks.filter(t => t.status === 'failed').length
@@ -184,7 +236,7 @@ export default function Dashboard() {
                   <Tag color="blue">计划中: {store.maintenanceWindows.filter(w => w.status === 'scheduled').length}</Tag>
                   <Tag color="green">已完成: {store.maintenanceWindows.filter(w => w.status === 'completed').length}</Tag>
                 </Space>
-                <Button type="primary" onClick={() => setMwModalOpen(true)}>新建维护窗口</Button>
+                <Button type="primary" onClick={handleOpenMWModal}>新建维护窗口</Button>
               </div>
               <Table dataSource={store.maintenanceWindows} columns={mwColumns} rowKey="id" size="small" pagination={{ pageSize: 10 }} />
             </div>
@@ -216,22 +268,48 @@ export default function Dashboard() {
           )}
         </Drawer>
 
-        <Modal title="新建维护窗口" open={mwModalOpen} onOk={handleCreateMW} onCancel={() => { mwForm.resetFields(); setMwModalOpen(false) }} okText="创建" cancelText="取消">
-          <Form form={mwForm} layout="vertical">
-            <Form.Item name="nodeId" label="目标节点" rules={[{ required: true, message: '请选择目标节点' }]}>
-              <Select placeholder="选择节点">
-                {store.nodes.map(n => (
-                  <Select.Option key={n.id} value={n.id} disabled={store.isNodeInMaintenance(n.name)}>
-                    {n.name} {store.isNodeInMaintenance(n.name) ? '(维护中)' : ''}
-                  </Select.Option>
-                ))}
-              </Select>
+        <Modal
+          title="新建维护窗口"
+          open={mwModalOpen}
+          onOk={handleCreateMW}
+          onCancel={handleCloseMWModal}
+          okText="创建"
+          cancelText="取消"
+          destroyOnClose
+          maskClosable={false}
+        >
+          <Form form={mwForm} layout="vertical" preserve={false}>
+            <Form.Item
+              name="nodeId"
+              label="目标节点"
+              rules={[{ required: true, message: '请选择目标节点' }]}
+            >
+              <Select
+                placeholder="选择节点"
+                options={nodeOptions}
+                style={{ width: '100%' }}
+                optionFilterProp="label"
+              />
             </Form.Item>
-            <Form.Item name="reason" label="维护原因" rules={[{ required: true, message: '请输入维护原因' }]}>
+            <Form.Item
+              name="reason"
+              label="维护原因"
+              rules={[{ required: true, message: '请输入维护原因' }]}
+            >
               <Input.TextArea rows={2} placeholder="例如：系统升级、硬件更换" />
             </Form.Item>
-            <Form.Item name="timeRange" label="维护时间范围" rules={[{ required: true, message: '请选择维护时间范围' }]}>
-              <RangePicker showTime style={{ width: '100%' }} disabledDate={(current) => current && current < dayjs().startOf('day')} />
+            <Form.Item
+              name="timeRange"
+              label="维护时间范围"
+              rules={[{ required: true, message: '请选择维护时间范围' }]}
+            >
+              <RangePicker
+                showTime={{ format: 'HH:mm' }}
+                format="YYYY-MM-DD HH:mm"
+                style={{ width: '100%' }}
+                disabledDate={disabledDate}
+                placeholder={['开始时间', '结束时间']}
+              />
             </Form.Item>
           </Form>
         </Modal>

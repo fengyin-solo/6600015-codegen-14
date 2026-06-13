@@ -45,6 +45,7 @@ interface TaskStore {
   metrics: MetricsSnapshot[]
   selectedTask: Task | null
   maintenanceWindows: MaintenanceWindow[]
+  uiPaused: boolean
   addTask: (name: string) => void
   retryTask: (id: string) => void
   cancelTask: (id: string) => void
@@ -56,6 +57,7 @@ interface TaskStore {
   completeMaintenanceWindow: (id: string) => void
   isNodeInMaintenance: (nodeName: string) => boolean
   tickMaintenanceWindows: () => void
+  setUiPaused: (paused: boolean) => void
 }
 
 export const useTaskStore = create<TaskStore>((set, get) => ({
@@ -71,6 +73,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   })),
   selectedTask: null,
   maintenanceWindows: [],
+  uiPaused: false,
   addTask: (name) => {
     const state = get()
     const allNodes = state.nodes
@@ -94,7 +97,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     tasks: get().tasks.map(t => t.id === id ? { ...t, status: 'failed' as TaskStatus, logs: [...t.logs, '[WARN] Cancelled by user'] } : t)
   }),
   selectTask: (t) => set({ selectedTask: t }),
-  refreshNodes: () => set({ nodes: mockNodes() }),
+  refreshNodes: () => {
+    if (!get().uiPaused) {
+      set({ nodes: mockNodes() })
+    }
+  },
   addMetric: () => {
     const m: MetricsSnapshot = {
       time: Date.now(),
@@ -225,4 +232,5 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       set({ maintenanceWindows: windows, tasks })
     }
   },
+  setUiPaused: (paused) => set({ uiPaused: paused }),
 }))
