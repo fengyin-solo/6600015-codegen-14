@@ -5,7 +5,6 @@ defmodule Scheduler.TaskManager do
     defstruct [:id, :name, :status, :node, :created_at, :retries, :max_retries, :logs]
   end
 
-  # Client API
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
@@ -20,12 +19,14 @@ defmodule Scheduler.TaskManager do
 
   def cancel_task(id), do: GenServer.call(__MODULE__, {:cancel_task, id})
 
+  def pause_task(id, reason), do: GenServer.call(__MODULE__, {:pause_task, id, reason})
+
+  def resume_task(id, reason), do: GenServer.call(__MODULE__, {:resume_task, id, reason})
+
   def get_stats, do: GenServer.call(__MODULE__, :get_stats)
 
-  # Server callbacks
   @impl true
   def init(_) do
-    # Seed some mock tasks
     tasks = for i <- 1..8 do
       name = Enum.at(~w[data_sync email_batch report_gen cache_warm log_rotate db_backup index_rebuild health_check], rem(i - 1, 8))
       status = Enum.at(~w[pending running success failed]a, :rand.uniform(4) - 1)
@@ -51,15 +52,25 @@ defmodule Scheduler.TaskManager do
   @impl true
   def handle_call({:add_task, name}, _from, state) do
     counter = state.counter + 1
+    node = "worker-#{:rand.uniform(4)}"
+    in_maintenance = Scheduler.MaintenanceManager.node_in_maintenance?(node)
+
+    initial_status = if in_maintenance, do: :paused, else: :pending
+    initial_logs = if in_maintenance do
+      ["[INFO] Task #{name} queued", "[WARN] Task paused: node #{node} is under maintenance"]
+    else
+      ["[INFO] Task #{name} queued"]
+    end
+
     task = %Task{
       id: "task-#{counter}",
       name: name,
-      status: :pending,
-      node: "worker-#{:rand.uniform(4)}",
+      status: initial_status,
+      node: node,
       created_at: DateTime.utc_now(),
       retries: 0,
       max_retries: 3,
-      logs: ["[INFO] Task #{name} queued"]
+      logs: initial_logs
     }
     {:reply, task, %{state | tasks: [task | state.tasks], counter: counter}}
   end
@@ -83,12 +94,33 @@ defmodule Scheduler.TaskManager do
   end
 
   @impl true
+  def handle_call({:pause_task, id, reason}, _from, state) do
+    tasks = Enum.map(state.tasks, fn
+      %{id: ^id, status: s} = t when s in [:pending, :running] ->
+        %{t | status: :paused, logs: t.logs ++ ["[WARN] Task paused: #{reason}"]}
+      t -> t
+    end)
+    {:reply, :ok, %{state | tasks: tasks}}
+  end
+
+  @impl true
+  def handle_call({:resume_task, id, reason}, _from, state) do
+    tasks = Enum.map(state.tasks, fn
+      %{id: ^id, status: :paused} = t ->
+        %{t | status: :pending, logs: t.logs ++ ["[INFO] Task resumed: #{reason}"]}
+      t -> t
+    end)
+    {:reply, :ok, %{state | tasks: tasks}}
+  end
+
+  @impl true
   def handle_call(:get_stats, _from, state) do
     stats = %{
       total: length(state.tasks),
       running: Enum.count(state.tasks, & &1.status == :running),
       success: Enum.count(state.tasks, & &1.status == :success),
-      failed: Enum.count(state.tasks, & &1.status == :failed)
+      failed: Enum.count(state.tasks, & &1.status == :failed),
+      paused: Enum.count(state.tasks, & &1.status == :paused)
     }
     {:reply, stats, state}
   end

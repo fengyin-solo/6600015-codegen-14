@@ -4,6 +4,7 @@ defmodule Scheduler.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      Scheduler.MaintenanceManager,
       Scheduler.TaskManager,
       {Phoenix.PubSub, name: Scheduler.PubSub},
       SchedulerWeb.Endpoint

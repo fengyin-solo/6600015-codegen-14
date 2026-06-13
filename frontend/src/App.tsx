@@ -6,9 +6,10 @@ import { useTaskStore } from './store/tasks'
 export default function App() {
   const addMetric = useTaskStore(s => s.addMetric)
   const refreshNodes = useTaskStore(s => s.refreshNodes)
+  const tickMaintenanceWindows = useTaskStore(s => s.tickMaintenanceWindows)
 
   useEffect(() => {
-    const interval = setInterval(() => { addMetric(); refreshNodes() }, 5000)
+    const interval = setInterval(() => { addMetric(); refreshNodes(); tickMaintenanceWindows() }, 5000)
     return () => clearInterval(interval)
   }, [])
 

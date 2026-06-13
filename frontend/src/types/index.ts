@@ -1,4 +1,4 @@
-export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'retry'
+export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'retry' | 'paused'
 export type NodeType = 'scheduler' | 'worker'
 
 export interface Task {
@@ -24,6 +24,20 @@ export interface ClusterNode {
   memory: number
   tasks: number
   uptime: number
+}
+
+export type MaintenanceWindowStatus = 'scheduled' | 'active' | 'completed' | 'cancelled'
+
+export interface MaintenanceWindow {
+  id: string
+  nodeId: string
+  nodeName: string
+  reason: string
+  startTime: number
+  endTime: number
+  status: MaintenanceWindowStatus
+  affectedTaskIds: string[]
+  createdAt: number
 }
 
 export interface MetricsSnapshot {

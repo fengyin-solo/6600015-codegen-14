@@ -1,25 +1,42 @@
 import { useState } from 'react'
-import { Layout, Tabs, Statistic, Row, Col, Card, Tag, Button, Input, Table, Drawer, Descriptions, Space, Progress } from 'antd'
+import { Layout, Tabs, Statistic, Row, Col, Card, Tag, Button, Input, Table, Drawer, Descriptions, Space, Progress, Modal, Select, DatePicker, Form } from 'antd'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 import { useTaskStore } from '../store/tasks'
-import type { Task, TaskStatus } from '../types'
+import type { Task, TaskStatus, MaintenanceWindow, MaintenanceWindowStatus } from '../types'
+import dayjs from 'dayjs'
 
 const { Header, Content } = Layout
+const { RangePicker } = DatePicker
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
-  pending: 'default', running: 'processing', success: 'success', failed: 'error', retry: 'warning'
+  pending: 'default', running: 'processing', success: 'success', failed: 'error', retry: 'warning', paused: 'purple'
+}
+
+const MW_STATUS_COLORS: Record<MaintenanceWindowStatus, string> = {
+  scheduled: 'blue', active: 'orange', completed: 'green', cancelled: 'default'
+}
+
+const MW_STATUS_LABELS: Record<MaintenanceWindowStatus, string> = {
+  scheduled: '计划中', active: '维护中', completed: '已完成', cancelled: '已取消'
 }
 
 export default function Dashboard() {
   const store = useTaskStore()
   const [newTaskName, setNewTaskName] = useState('')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [mwModalOpen, setMwModalOpen] = useState(false)
+  const [mwForm] = Form.useForm()
 
   const taskColumns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 100 },
     { title: '名称', dataIndex: 'name', key: 'name' },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (s: TaskStatus) => <Tag color={STATUS_COLORS[s]}>{s}</Tag> },
-    { title: '节点', dataIndex: 'node', key: 'node' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (s: TaskStatus) => <Tag color={STATUS_COLORS[s]}>{s === 'paused' ? '已暂停' : s}</Tag> },
+    { title: '节点', dataIndex: 'node', key: 'node', render: (node: string) => (
+      <Space>
+        {node}
+        {store.isNodeInMaintenance(node) && <Tag color="orange">维护中</Tag>}
+      </Space>
+    )},
     { title: '重试', key: 'retries', render: (_: any, r: Task) => `${r.retries}/${r.maxRetries}` },
     { title: '耗时', key: 'duration', render: (_: any, r: Task) => r.duration ? `${(r.duration / 1000).toFixed(1)}s` : '-' },
     { title: '操作', key: 'actions', render: (_: any, r: Task) => (
@@ -31,9 +48,48 @@ export default function Dashboard() {
     )},
   ]
 
+  const mwColumns = [
+    { title: 'ID', dataIndex: 'id', key: 'id', width: 120 },
+    { title: '节点', dataIndex: 'nodeName', key: 'nodeName', render: (name: string) => (
+      <Space>
+        <span>{name}</span>
+        {store.isNodeInMaintenance(name) && <Tag color="orange">维护中</Tag>}
+      </Space>
+    )},
+    { title: '原因', dataIndex: 'reason', key: 'reason' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (s: MaintenanceWindowStatus) => (
+      <Tag color={MW_STATUS_COLORS[s]}>{MW_STATUS_LABELS[s]}</Tag>
+    )},
+    { title: '开始时间', key: 'startTime', render: (_: any, r: MaintenanceWindow) => new Date(r.startTime).toLocaleString() },
+    { title: '结束时间', key: 'endTime', render: (_: any, r: MaintenanceWindow) => new Date(r.endTime).toLocaleString() },
+    { title: '受影响任务', key: 'affected', render: (_: any, r: MaintenanceWindow) => <Tag>{r.affectedTaskIds.length} 个任务</Tag> },
+    { title: '操作', key: 'actions', render: (_: any, r: MaintenanceWindow) => (
+      <Space>
+        {r.status === 'scheduled' && <Button size="small" danger onClick={() => store.cancelMaintenanceWindow(r.id)}>取消</Button>}
+        {r.status === 'active' && <Button size="small" type="primary" onClick={() => store.completeMaintenanceWindow(r.id)}>提前结束</Button>}
+      </Space>
+    )},
+  ]
+
+  const handleCreateMW = () => {
+    mwForm.validateFields().then(values => {
+      const [start, end] = values.timeRange
+      store.createMaintenanceWindow(
+        values.nodeId,
+        store.nodes.find(n => n.id === values.nodeId)?.name ?? values.nodeId,
+        values.reason,
+        start.valueOf(),
+        end.valueOf(),
+      )
+      mwForm.resetFields()
+      setMwModalOpen(false)
+    })
+  }
+
   const successCount = store.tasks.filter(t => t.status === 'success').length
   const failedCount = store.tasks.filter(t => t.status === 'failed').length
   const runningCount = store.tasks.filter(t => t.status === 'running').length
+  const pausedCount = store.tasks.filter(t => t.status === 'paused').length
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -47,12 +103,12 @@ export default function Dashboard() {
         </div>
       </Header>
       <Content style={{ padding: 16 }}>
-        {/* Stats */}
         <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={6}><Card><Statistic title="总任务" value={store.tasks.length} /></Card></Col>
-          <Col span={6}><Card><Statistic title="运行中" value={runningCount} valueStyle={{ color: '#1890ff' }} /></Card></Col>
-          <Col span={6}><Card><Statistic title="成功" value={successCount} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-          <Col span={6}><Card><Statistic title="失败" value={failedCount} valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
+          <Col span={5}><Card><Statistic title="总任务" value={store.tasks.length} /></Card></Col>
+          <Col span={5}><Card><Statistic title="运行中" value={runningCount} valueStyle={{ color: '#1890ff' }} /></Card></Col>
+          <Col span={5}><Card><Statistic title="成功" value={successCount} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+          <Col span={5}><Card><Statistic title="失败" value={failedCount} valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
+          <Col span={4}><Card><Statistic title="已暂停" value={pausedCount} valueStyle={{ color: '#722ed1' }} /></Card></Col>
         </Row>
 
         <Tabs items={[
@@ -104,7 +160,12 @@ export default function Dashboard() {
               {store.nodes.map(node => (
                 <Col span={8} key={node.id} style={{ marginBottom: 16 }}>
                   <Card title={<span>{node.type === 'scheduler' ? '🎯' : '⚙️'} {node.name}</span>}
-                    extra={<Tag color={node.status === 'online' ? 'green' : node.status === 'overloaded' ? 'orange' : 'red'}>{node.status}</Tag>}>
+                    extra={
+                      <Space>
+                        {store.isNodeInMaintenance(node.name) && <Tag color="orange">维护中</Tag>}
+                        <Tag color={node.status === 'online' ? 'green' : node.status === 'overloaded' ? 'orange' : 'red'}>{node.status}</Tag>
+                      </Space>
+                    }>
                     <Progress percent={Math.round(node.cpu)} strokeColor={node.cpu > 80 ? '#ff4d4f' : '#1890ff'} format={v => `CPU ${v}%`} />
                     <Progress percent={Math.round(node.memory)} strokeColor={node.memory > 80 ? '#ff4d4f' : '#52c41a'} format={v => `MEM ${v}%`} />
                     <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
@@ -115,17 +176,34 @@ export default function Dashboard() {
               ))}
             </Row>
           )},
+          { key: 'maintenance', label: '维护窗口', children: (
+            <div>
+              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Space>
+                  <Tag color="orange">活跃维护: {store.maintenanceWindows.filter(w => w.status === 'active').length}</Tag>
+                  <Tag color="blue">计划中: {store.maintenanceWindows.filter(w => w.status === 'scheduled').length}</Tag>
+                  <Tag color="green">已完成: {store.maintenanceWindows.filter(w => w.status === 'completed').length}</Tag>
+                </Space>
+                <Button type="primary" onClick={() => setMwModalOpen(true)}>新建维护窗口</Button>
+              </div>
+              <Table dataSource={store.maintenanceWindows} columns={mwColumns} rowKey="id" size="small" pagination={{ pageSize: 10 }} />
+            </div>
+          )},
         ]} />
 
-        {/* Task Detail Drawer */}
         <Drawer title="任务详情" open={drawerOpen} onClose={() => setDrawerOpen(false)} width={480}>
           {store.selectedTask && (
             <>
               <Descriptions column={1} bordered size="small">
                 <Descriptions.Item label="ID">{store.selectedTask.id}</Descriptions.Item>
                 <Descriptions.Item label="名称">{store.selectedTask.name}</Descriptions.Item>
-                <Descriptions.Item label="状态"><Tag color={STATUS_COLORS[store.selectedTask.status]}>{store.selectedTask.status}</Tag></Descriptions.Item>
-                <Descriptions.Item label="执行节点">{store.selectedTask.node}</Descriptions.Item>
+                <Descriptions.Item label="状态"><Tag color={STATUS_COLORS[store.selectedTask.status]}>{store.selectedTask.status === 'paused' ? '已暂停' : store.selectedTask.status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="执行节点">
+                  <Space>
+                    {store.selectedTask.node}
+                    {store.isNodeInMaintenance(store.selectedTask.node) && <Tag color="orange">维护中</Tag>}
+                  </Space>
+                </Descriptions.Item>
                 <Descriptions.Item label="重试次数">{store.selectedTask.retries}/{store.selectedTask.maxRetries}</Descriptions.Item>
                 <Descriptions.Item label="创建时间">{new Date(store.selectedTask.createdAt).toLocaleString()}</Descriptions.Item>
                 <Descriptions.Item label="耗时">{store.selectedTask.duration ? `${(store.selectedTask.duration / 1000).toFixed(1)}s` : '-'}</Descriptions.Item>
@@ -137,6 +215,26 @@ export default function Dashboard() {
             </>
           )}
         </Drawer>
+
+        <Modal title="新建维护窗口" open={mwModalOpen} onOk={handleCreateMW} onCancel={() => { mwForm.resetFields(); setMwModalOpen(false) }} okText="创建" cancelText="取消">
+          <Form form={mwForm} layout="vertical">
+            <Form.Item name="nodeId" label="目标节点" rules={[{ required: true, message: '请选择目标节点' }]}>
+              <Select placeholder="选择节点">
+                {store.nodes.map(n => (
+                  <Select.Option key={n.id} value={n.id} disabled={store.isNodeInMaintenance(n.name)}>
+                    {n.name} {store.isNodeInMaintenance(n.name) ? '(维护中)' : ''}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+            <Form.Item name="reason" label="维护原因" rules={[{ required: true, message: '请输入维护原因' }]}>
+              <Input.TextArea rows={2} placeholder="例如：系统升级、硬件更换" />
+            </Form.Item>
+            <Form.Item name="timeRange" label="维护时间范围" rules={[{ required: true, message: '请选择维护时间范围' }]}>
+              <RangePicker showTime style={{ width: '100%' }} disabledDate={(current) => current && current < dayjs().startOf('day')} />
+            </Form.Item>
+          </Form>
+        </Modal>
       </Content>
     </Layout>
   )
